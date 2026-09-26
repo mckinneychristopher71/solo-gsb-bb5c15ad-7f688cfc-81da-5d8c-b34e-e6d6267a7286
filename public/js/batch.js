@@ -6,6 +6,8 @@
  *     顺序任意，允许额外列，额外列不参与校样）；
  *   - 字段可用英文双引号包裹：包裹字段内可含逗号与换行，两个连续双引号（""）
  *     转义为一个双引号；引号闭合后只允许空白、逗号、换行或文件尾；
+ *   - 双引号只可在字段开头开启包裹，或在包裹字段内成对转义；未包裹字段内
+ *     出现双引号即为格式错误（指出源文本行号，阻止整批校样）；
  *   - 行结束符支持 \n、\r\n、\r；完全空白的行（无引号/逗号结构且仅含空白）忽略；
  *   - 数据记录最多 20 条（不含表头）。
  *
@@ -23,7 +25,8 @@
    * @param {string} text 原始 CSV 内容
    * @returns {{rows:Array<{cells:string[],line:number}>, errors:string[]}}
    *   rows 含表头行，line 为该记录在源文本中的起始行号（从 1 起，引号内换行计入）；
-   *   errors 为解析级错误（含行号），非空时记录边界不可信，调用方应中止。
+   *   errors 为解析级错误（含行号：引号未闭合、闭合引号后紧跟非法字符、
+   *   未包裹字段内出现双引号），非空时记录边界不可信，调用方应中止。
    */
   function parseCsv(text) {
     var src = String(text == null ? '' : text);
@@ -37,6 +40,16 @@
     var recLine = 1;        // 当前记录的起始行号
     var hasStructure = false; // 当前记录是否含引号或逗号（用于忽略完全空白行）
     var state = 'start';    // start 字段起始 / plain 未包裹字段内 / quoted 引号内 / afterQ 引号闭合后
+    var strayQuoteLines = Object.create(null); // 已报告“未包裹字段内双引号”的行（每行只报一次）
+
+    function strayQuoteError() {
+      if (!strayQuoteLines[line]) {
+        strayQuoteLines[line] = true;
+        errors.push('第 ' + line + ' 行：未被英文双引号包裹的字段中出现双引号。' +
+          '双引号只能位于字段开头以开启包裹，或在包裹字段内成对书写（""）表示转义；' +
+          '含逗号、换行或双引号的字段请用英文双引号整体包裹。');
+      }
+    }
 
     function endField() {
       cells.push(field);
@@ -117,7 +130,10 @@
         continue;
       }
 
-      // plain：未包裹字段内的普通字符
+      // plain：未包裹字段内——双引号只能在字段开头开启包裹或在包裹字段内
+      // 成对转义；此处出现双引号为格式错误（指出源文本行号，阻止整批校样），
+      // 同时把引号并入字段继续解析，便于一次性发现更多错误
+      if (ch === '"') strayQuoteError();
       field += ch;
       i++;
     }
